@@ -1,0 +1,17 @@
+{
+	email {$ACME_EMAIL}
+}
+
+{$DOMAIN} {
+	encode zstd gzip
+	request_body {
+		max_size 16KB
+	}
+	# No trusted_proxies: Caddy discards untrusted incoming forwarding headers.
+	reverse_proxy app:8000 {
+		transport http {
+			dial_timeout 5s
+			response_header_timeout 630s
+		}
+	}
+}

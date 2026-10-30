@@ -1,0 +1,68 @@
+name: gramask
+
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "${APP_BIND_ADDRESS:-127.0.0.1}:${PORT:-8000}:8000"
+    environment:
+      PORT: "8000"
+      APP_ENV: ${APP_ENV:-development}
+      APP_ORIGIN: ${APP_ORIGIN:-http://localhost:8000}
+      SECURE_COOKIES: ${SECURE_COOKIES:-0}
+      DB_PATH: /app/data/gramask.db
+      DEMO_MODE: "0"
+      LLM_PROVIDER: ollama
+      LLM_BASE_URL: http://ollama:11434
+      LLM_MODEL: ${LLM_MODEL:-gemma3:4b}
+      LLM_TIMEOUT: ${LLM_TIMEOUT:-120}
+      LLM_MAX_CONCURRENT: ${LLM_MAX_CONCURRENT:-2}
+      ALLOW_FALLBACK: "0"
+      QUESTION_ROUTING: ${QUESTION_ROUTING:-knowledge_first}
+      QUORUM: ${QUORUM:-3}
+      AGREEMENT: ${AGREEMENT:-0.6}
+      TIMEOUT_MIN: ${TIMEOUT_MIN:-15}
+      FACT_TTL_HOURS: ${FACT_TTL_HOURS:-2}
+      SESSION_DAYS: ${SESSION_DAYS:-14}
+      ASK_RATE_LIMIT: ${ASK_RATE_LIMIT:-20}
+      AUTH_RATE_LIMIT: ${AUTH_RATE_LIMIT:-15}
+    volumes:
+      - gramask-data:/app/data
+    depends_on:
+      ollama:
+        condition: service_healthy
+      pull-model:
+        condition: service_completed_successfully
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  ollama:
+    image: ollama/ollama:0.40.13
+    restart: unless-stopped
+    environment:
+      OLLAMA_HOST: 0.0.0.0:11434
+    volumes:
+      - ollama-models:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+
+  pull-model:
+    image: ollama/ollama:0.40.13
+    restart: "no"
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    command: ["pull", "${LLM_MODEL:-gemma3:4b}"]
+    depends_on:
+      ollama:
+        condition: service_healthy
+
+volumes:
+  gramask-data:
+  ollama-models:

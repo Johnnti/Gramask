@@ -1,0 +1,5 @@
+# Runtime versions verified together in the project virtual environment.
+fastapi==0.162.0
+uvicorn==0.54.0
+httpx==0.28.1
+pydantic==2.14.2

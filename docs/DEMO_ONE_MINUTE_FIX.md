@@ -12,3 +12,9 @@ Applied 2026-10-30 to `gramask-submission-demo` on port 8009 using image `gramas
 Verification: all 58 regression tests passed locally and in the exact Docker image, including production behavior checks. An isolated real-clock test confirmed both choice and text questions with zero reports closed automatically after 60.43 seconds. Browser verification confirmed the asker's JTS result (No 2/3, Not sure 1/3) and homecoming result (Not sure 2/3, Nov 3rd 1/3). All four demo tabs were refreshed; no browser errors were observed.
 
 A consistent pre-update backup is retained in the `gramask-demo-data` volume at `/app/data/before-one-minute-demo.db`. Production image and release archive were not replaced.
+
+## Written-answer endorsements
+
+The running demo now uses `gramask-demo:endorsements`. Existing written responses appear anonymously in later students' inboxes with support counts and an endorsement button. The text box stays available. The server resolves the selected answer within the same question, saves one response for that student, and enforces the same duplicate, account-permission, and deadline checks as a typed answer.
+
+All 60 regression tests passed locally and in the Docker image. A four-account browser test submitted an original answer, endorsed it from Student 2, and submitted a different answer from Student 3. The asker received the completed result immediately: original answer 2/3 (66.7%), alternative 1/3 (33.3%). The pre-update database backup is `/app/data/before-endorsements.db` in the demo data volume.

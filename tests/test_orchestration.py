@@ -27,6 +27,9 @@ class OrchestrationTests(unittest.TestCase):
             if "in_scope" in fields:
                 output = {"in_scope": True, "kind": "dynamic", "entity": "main_dining_hall",
                           "attribute": "menu_today", "answer_type": "text", "category": "dining"}
+            elif 'fact_id' in fields:
+                facts = json.loads(payload['messages'][0]['content'].split('\nINPUT:\n')[1])['facts']
+                output = {'fact_id': next((fact['id'] for fact in facts if fact['kind'] == 'dynamic'), None)}
             else:
                 output = {"representative_index": 0, "supporting_indices": [0, 1, 2]}
             return httpx.Response(200, json={"message": {"content": json.dumps(output)}})
@@ -48,7 +51,9 @@ class OrchestrationTests(unittest.TestCase):
                 self.assertEqual(response.status_code, 201, response.text)
                 client.headers["X-CSRF-Token"] = response.json()["csrf_token"]
             text = "What is on the dining hall menu today?"
-            query = owner.post("/api/ask", json={"text": text}).json()
+            response = owner.post("/api/ask", json={"text": text})
+            self.assertEqual(response.status_code, 200, response.text)
+            query = response.json()
             self.assertEqual(query["source"], "pending")
             self.assertEqual(query["engine"], "gemma3")
             self.assertEqual(clients[1].get("/api/inbox").json()[0]["prompt"], text)
@@ -65,7 +70,7 @@ class OrchestrationTests(unittest.TestCase):
             cached = owner.post("/api/ask", json={"text": text}).json()
             self.assertEqual(cached["source"], "crowd")
             self.assertEqual(cached["status"], "answered")
-            self.assertEqual(len(requests), 3)  # two routing calls, one evidence grouping
+            self.assertEqual(len(requests), 4)  # two intent checks, grouping, grounded retrieval
             self.assertEqual(owner.get("/api/config").json()["engine"]["status"], "available")
 
 

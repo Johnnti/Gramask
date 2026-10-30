@@ -43,6 +43,7 @@ def main():
             "APP_ENV": "test", "APP_ORIGIN": "http://testserver", "SECURE_COOKIES": "0",
             "DB_PATH": str(Path(folder) / "smoke.db"), "DEMO_MODE": "0", "ALLOW_FALLBACK": "0",
             "QUORUM": "3", "AGREEMENT": "0.6", "TIMEOUT_MIN": "60", "AUTH_RATE_LIMIT": "1000",
+            "LIVE_FRESHNESS_MIN": "5",
         })
         from contextlib import ExitStack
         from fastapi.testclient import TestClient
@@ -51,6 +52,7 @@ def main():
         from llm import FACTS_BY_ID
 
         outcomes = []
+        evidence = {}
 
         def check(condition, reason):
             if not condition:
@@ -159,6 +161,7 @@ def main():
                 check(any(report in resolved["answer"] for report in reports[:2]),
                       "Consensus did not preserve an agreeing student report")
                 check(resolved["valid_until"] > time.time(), "Fresh crowd answer has no future expiry")
+                check(resolved['valid_until'] <= time.time() + 300, 'Live evidence exceeds five minutes')
                 notifications = owner.get("/api/notifications").json()
                 check(any(item["kind"] == "question_answered" and item["query_id"] == result["id"]
                           for item in notifications), "Asker did not receive an answer notification")
@@ -170,6 +173,21 @@ def main():
                     check(cached["source"] == "crowd" and cached["status"] == "answered",
                           "Identical question did not reuse fresh evidence" + route_details(cached))
                     check(cached["answer"] == resolved["answer"], "Cached answer changed the underlying evidence")
+                    check(cached['valid_until'] == resolved['valid_until'], 'Reuse renewed the evidence age')
+                evidence.update(text=question, question_id=question_id)
+
+            def stale_evidence():
+                check(bool(evidence), 'Fresh evidence setup did not complete')
+                with application.db() as connection:
+                    connection.execute('UPDATE facts SET created_at=?, valid_until=? WHERE crowd_question_id=?',
+                                       (time.time() - 301, time.time() + 7200, evidence['question_id']))
+                result = ask(evidence['text'])
+                check(result['status'] == 'pending', 'Five-minute-old evidence was reused')
+                check(result['crowd_question_id'] != evidence['question_id'], 'Stale question was not reopened')
+                check(all(any(q['id'] == result['crowd_question_id'] for q in c.get('/api/inbox').json())
+                          for c in contributors), 'Stale question did not reach all contributors')
+                check(not any(f['crowd_question_id'] == evidence['question_id'] for f in owner.get('/api/facts').json()['live']),
+                      'Stale evidence remained in the live knowledge list')
 
             if case("live_model_inventory_and_accounts", setup):
                 def stable_question(text, fact_id):
@@ -184,11 +202,12 @@ def main():
                 case("unfamiliar_topic_reaches_students", unfamiliar_topic)
                 case("dynamic_route_preserves_negation", dynamic_negation)
                 case("text_consensus_notification_and_cache", crowd_consensus)
+                case("stale_evidence_returns_to_community", stale_evidence)
         summary = {"model": settings.llm_model, "provider": settings.llm_provider,
                    "passed": sum(item["passed"] for item in outcomes), "total": len(outcomes),
                    "isolated_database": True, "demo": False, "fallback": False}
         print(json.dumps({"summary": summary}), flush=True)
-        return 0 if all(item["passed"] for item in outcomes) and len(outcomes) == 6 else 1
+        return 0 if all(item["passed"] for item in outcomes) and len(outcomes) == 7 else 1
 
 
 if __name__ == "__main__":

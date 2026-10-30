@@ -47,6 +47,16 @@ class Settings:
     llm_max_concurrent: int = 2
     demo_broadcast_all: bool = False
     question_routing: str = 'knowledge_first'
+    live_freshness_min: float = 5
+    demo_live_llm: bool = False
+
+    @property
+    def simulated_llm(self):
+        return self.demo_mode and not self.demo_live_llm
+
+    @property
+    def live_ttl_seconds(self):
+        return min(self.fact_ttl_hours * 3600, self.live_freshness_min * 60)
 
     @property
     def broadcast_questions(self):
@@ -96,6 +106,8 @@ class Settings:
             llm_max_concurrent=number("LLM_MAX_CONCURRENT", 2, 1, 16, int),
             demo_broadcast_all=boolean("DEMO_BROADCAST_ALL", False),
             question_routing=routing,
+            live_freshness_min=number("LIVE_FRESHNESS_MIN", 5, 0.01, 1440),
+            demo_live_llm=boolean("DEMO_LIVE_LLM", False),
         )
 
 

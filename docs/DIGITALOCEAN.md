@@ -36,7 +36,7 @@ nano .env.production
 
 Set `DOMAIN` to your actual hostname, without `https://` or a path, and `ACME_EMAIL` to your certificate contact email. Keep `LLM_MODEL=gemma3:4b`. No model API key is needed for the included private Ollama service.
 
-`QUESTION_ROUTING=community` sends **every submitted question** to other students. It bypasses instant knowledge answers, cached results, and merging repeated submissions. Gemma chooses the input format and groups the students' text reports; it does not invent the result. Set `QUESTION_ROUTING=knowledge_first` only if you want sourced known facts or fresh crowd evidence returned immediately. In either production mode, unfamiliar topics go to students instead of being rejected.
+`QUESTION_ROUTING=knowledge_first` is the default: Gemma checks the SQLite knowledge index and returns a grounded answer when available. `LIVE_FRESHNESS_MIN=5` expires changing information after five minutes; stable curated facts remain reusable. Missing or stale answers go to students. `QUESTION_ROUTING=community` is an optional override for presentations that require every question to open a fresh crowd request. In both modes, unfamiliar topics reach students instead of being rejected. Existing `.env.production` files must be updated to `QUESTION_ROUTING=knowledge_first`; changing a Compose default does not override an explicit old value.
 
 Production forces demo mode, simulated accounts, and heuristic model fallback off. Students create real accounts; there is no automatic three-account demonstration helper on the public site.
 

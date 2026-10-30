@@ -26,8 +26,10 @@ services:
         value: "0"
       - key: ALLOW_FALLBACK
         value: "0"
+      - key: LIVE_FRESHNESS_MIN
+        value: "5"
       - key: QUESTION_ROUTING
-        value: community
+        value: knowledge_first
       - key: LLM_PROVIDER
         value: openai
       - key: LLM_BASE_URL

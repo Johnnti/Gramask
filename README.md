@@ -43,28 +43,36 @@ For a remote Gemma 3 deployment with an OpenAI-compatible API, set `LLM_PROVIDER
 1. Create an account and ask “When was Grambling State University founded?” to see a sourced knowledge answer.
 2. Ask “Is the library open right now?” It appears in other accounts' community inboxes.
 3. Sign in as three different contributors using separate browser profiles or devices. Submit their observations.
-4. Once at least three eligible reports meet the agreement threshold, the asker receives an answer with an expiry time. Other students asking the identical question receive the same fresh evidence.
+4. Once at least three eligible reports meet the agreement threshold, the asker receives an answer with an expiry time. Other students asking a matching question can reuse that evidence for up to five minutes. Gemma checks that the evidence answers the complete question.
 
 The asker and other subscribers cannot vote on their own question. Each account gets one report per question. “Not sure” does not count toward quorum. Questions without sufficient agreement close without a claimed answer. Live information is attributed to student reports, not university verification.
 
+## Knowledge and freshness
+
+SQLite FTS5 indexes curated campus facts and completed community reports in the existing database. Gemma first classifies the question without reference material, so stable descriptions cannot answer current conditions. It then selects only a retrieved record that answers the whole question; the server returns the saved evidence and its source instead of generating unsupported facts. No separate vector service, embedding model, or API key is needed.
+
+Stable curated facts, such as the founding date, remain reusable. All community observations are changing information and expire after **five minutes from the oldest contributing observation**, even if a legacy record has a longer expiry. Retrieval and publication both check the age. Reading an answer never refreshes its timestamp. Stale answers remain in personal history, but cannot answer a new question. Uncertain, tied, or insufficiently supported results can still be shown to the original asker; they do not count as known answers for reuse. Yes/no reports require the same normalized question so opposite wording cannot reuse a vote.
+
 ## Explicit one-device demo
 
-For an offline demonstration only, use an isolated database:
+For an offline simulation, use an isolated database:
 
 ```bash
 DEMO_MODE=1 APP_ENV=development DB_PATH=/tmp/gramask-demo.db \
   python -m uvicorn app:app --host 127.0.0.1 --port 8000
 ```
 
-Create an account and use the guided demo controls. This mode uses deterministic classification and simulated voters, is visibly labeled, and scopes simulated records to your account. Reset removes only that account's demo data. Demo mode is off by default and rejected in production configuration.
+Create an account and use the guided demo controls. This mode uses deterministic classification and simulated voters, is visibly labeled, and scopes simulated records to your account. Reset removes only that account's demo data. Set `DEMO_LIVE_LLM=1` to keep the demo account helpers while using the real Gemma 3 engine. Demo mode is off by default and rejected in production configuration.
 
 To answer manually from three accounts in the **same browser**, click **Set up 3 student accounts**, then open **Student 1**, **Student 2**, and **Student 3**. Each link opens its own signed-in session without replacing the asker. Type a question in the asker's tab or use **1. Create question**, then answer from each student's Community inbox. After quorum and agreement are met, the answer and notification appear in the asker's original tab. Students cannot read the asker's private history or vote on another demo owner's questions. **Reconnect student accounts** restores their sessions without creating duplicate voters. The automatic simulation remains optional. For written questions, later students see existing answers and can click **Endorse this answer** or submit their own response. An endorsement counts as that student’s single response and supports the existing answer in the final breakdown.
 
 ## Deploy
 
-For a presentation where **every typed question must reach every other student**, set `DEMO_MODE=1 DEMO_BROADCAST_ALL=1`. This bypasses topic rejection, instant knowledge answers, cached answers, and shared-question reuse in the demo. Each submission opens a fresh crowd request; all other student accounts can respond, including accounts created by another demo asker. The requester cannot vote. In this broadcast demo, all responses count, including “Not sure.” Questions close after three students respond or when their deadline expires, and the asker receives the count and percentage for each response. Written answers are grouped by matching text; uncertain answers are grouped as “Not sure.” At the deadline, partial responses are returned; if nobody responded, the result says “No answers received.” Set `TIMEOUT_MIN=1` for a one-minute window. These rules are enabled in the local submission demo on port 8009 and have no effect outside demo mode.
+The submission demo on port 8009 uses `QUESTION_ROUTING=knowledge_first`, real Gemma 3 (`DEMO_LIVE_LLM=1`), and three student tabs. Known, grounded answers return without waiting for students. Missing or stale answers go to the community. `DEMO_MODE=1 DEMO_BROADCAST_ALL=1` lets every other student account respond and returns the share of **all** responses, including “Not sure.” Questions close after three responses or one minute (`TIMEOUT_MIN=1`); partial or no-answer results are returned at the deadline. Existing written answers can be endorsed, or students can write their own.
 
-**DigitalOcean:** use the separate [Droplet deployment guide](docs/DIGITALOCEAN.md), `compose.production.yaml`, and `bash scripts/production.sh deploy`. This setup includes automatic HTTPS, persistent storage, private Ollama, trusted proxy handling, and verified database backups. Its own image tags and volumes keep the local submission demo independent. The production default in this stack sends every question to students using real Gemma 3; unfamiliar topics are not rejected.
+For an explicitly community-only presentation, additionally set `QUESTION_ROUTING=community`. This bypasses knowledge and cached answers and opens a fresh request for every submission. The audience/response-summary option no longer disables knowledge lookup by itself.
+
+**DigitalOcean:** use the separate [Droplet deployment guide](docs/DIGITALOCEAN.md), `compose.production.yaml`, and `bash scripts/production.sh deploy`. This setup includes automatic HTTPS, persistent storage, private Ollama, trusted proxy handling, and verified database backups. Its own image tags and volumes keep the local submission demo independent. The production default checks knowledge first using real Gemma 3; unknown or stale information goes to students, including unfamiliar topics.
 
 The repository includes a non-root `Dockerfile`, an app + Ollama `compose.yaml`, and a disk-backed `render.yaml` for hosting against an external Gemma 3 endpoint. See [deployment instructions](docs/DEPLOYMENT.md) for HTTPS, Render, health checks, and backups.
 
@@ -78,16 +86,18 @@ For production, set `APP_ENV=production`, `APP_ORIGIN=https://your-domain.exampl
 | `LLM_BASE_URL` | `http://127.0.0.1:11434` | Server-side model endpoint |
 | `LLM_MODEL` | `gemma3:4b` | Gemma 3 model identifier |
 | `LLM_API_KEY` | empty | Optional provider credential |
-| `LLM_TIMEOUT` | `45` | Timeout per inference call; example config uses 120 for CPU. Static questions use two calls. |
+| `LLM_TIMEOUT` | `45` | Timeout per inference call; example config uses 120 for CPU. Each question is classified first; a matching knowledge candidate needs a second short selection call. |
 | `LLM_MAX_CONCURRENT` | `2` | Concurrent model request limit |
 | `ALLOW_FALLBACK` | `0` | Explicit degraded heuristic mode; leave disabled in production |
 | `DB_PATH` | `gramask.db` beside app | SQLite location |
 | `QUORUM` | `3` | Minimum eligible reports |
 | `AGREEMENT` | `0.6` | Minimum fraction supporting one answer |
 | `TIMEOUT_MIN` | `15` | Crowd response window |
-| `FACT_TTL_HOURS` | `2` | Fact lifetime; menus capped at three hours |
-| `DEMO_MODE` | `0` | Explicit, labeled offline demo |
-| `QUESTION_ROUTING` | `knowledge_first` | `community` sends each submission to students; `knowledge_first` returns trusted facts/fresh evidence first. Both production modes route unfamiliar topics to students. DigitalOcean defaults to `community`. |
+| `LIVE_FRESHNESS_MIN` | `5` | Maximum age of changing information; stable curated facts have no automatic expiry |
+| `FACT_TTL_HOURS` | `2` | Optional legacy lifetime cap; effective live lifetime is the smaller of this and `LIVE_FRESHNESS_MIN` |
+| `DEMO_MODE` | `0` | Enable demo helpers; offline simulation unless `DEMO_LIVE_LLM=1` |
+| `DEMO_LIVE_LLM` | `0` | Use real Gemma with demo account helpers |
+| `QUESTION_ROUTING` | `knowledge_first` | `community` sends each submission to students; `knowledge_first` returns trusted facts/fresh evidence first. Both modes route unfamiliar topics to students. DigitalOcean defaults to `knowledge_first`. |
 | `APP_ENV` | `development` | `development`, `test`, or `production` |
 | `APP_ORIGIN` | empty | Exact browser origin; required HTTPS origin in production |
 | `SECURE_COOKIES` | true in production | HTTPS-only account cookies |
@@ -115,7 +125,7 @@ Accounts authenticate a username/password, not campus enrollment. University SSO
 
 - `app.py`, `database.py`, `security.py` — authenticated API, persistence, crowd workflow, expiry, notifications
 - `config.py` — validated settings
-- `llm.py` — Gemma 3 integration, structured-output validation, fact grounding
+- `llm.py`, `knowledge.py` — Gemma 3 integration, SQLite knowledge search, structured-output validation, fact grounding
 - `index.html`, `static/` — responsive dashboard and app shell
 - `seed_facts.json` — curated facts with source links
 - `tests/` — offline API and model-boundary regression tests

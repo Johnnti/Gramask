@@ -22,6 +22,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from config import settings
 from database import db, init_db
 from llm import EngineUnavailable, STATIC_FACTS, engine, evidence_key
+from knowledge import fresh, retrieve, usable_fact
 from security import hash_password, limiter, token_hash, verify_password
 
 HERE = Path(__file__).resolve().parent
@@ -160,17 +161,16 @@ def close_question(connection, question, result, n_votes, now):
         answer, status, source = format_report_summary(summary), 'unanswered', 'no_answers'
     elif result:
         confidence = result['agreement']
-        ttl = settings.fact_ttl_hours * 3600
-        if 'menu' in question['attribute']:
-            ttl = min(ttl, 3 * 3600)
-        valid_until = now + ttl
+        # Count age from the observations, not delayed aggregation or reads.
+        observed_at = connection.execute('SELECT MIN(created_at) FROM crowd_answers WHERE question_id=?', (question['id'],)).fetchone()[0] or now
+        valid_until = observed_at + settings.live_ttl_seconds
         result_engine = result.get('engine', question['engine'])
         cursor = connection.execute('''INSERT INTO facts(entity,attribute,question,question_key,answer_type,category,value,
             confidence,n_votes,created_at,valid_until,crowd_question_id,demo_owner_id,engine,report_summary)
             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''', (
                 question['entity'], question['attribute'], question['prompt'], question['question_key'],
                 question['answer_type'], question['category'], result['value'], confidence,
-                n_votes, now, valid_until, question['id'], question['demo_owner_id'], result_engine, summary_json))
+                n_votes, observed_at, valid_until, question['id'], question['demo_owner_id'], result_engine, summary_json))
         fact = connection.execute('SELECT * FROM facts WHERE id=?', (cursor.lastrowid,)).fetchone()
         answer, status, source = format_fact(fact), 'answered', 'crowd'
     else:
@@ -440,29 +440,38 @@ def logout(request: Request, response: Response, user=Depends(mutation_user)):
 
 
 def create_query(user, text, demo=False):
-    broadcast = not demo and (settings.broadcast_questions or
-                (not settings.demo_mode and settings.question_routing == 'community'))
+    broadcast = not demo and settings.question_routing == 'community'
+    owner = user['id'] if demo else None
+    selected = None
     now = time.time()
-    with db() as connection:
-        known = [row[0] for row in connection.execute('SELECT DISTINCT entity FROM crowd_questions WHERE demo_owner_id IS NULL UNION SELECT DISTINCT entity FROM facts WHERE demo_owner_id IS NULL')]
     if demo:
         info = {'in_scope': True, 'kind': 'dynamic', 'entity': 'library', 'attribute': 'open_status',
             'answer_type': 'yes_no', 'crowd_prompt': text, 'static_answer': None, 'fact_id': None,
             'category': 'library', 'engine': 'demo'}
     else:
         try:
-            info = engine.classify(text, known_entities=known)
+            # Classify the question without reference facts first. Small models
+            # can otherwise mistake a related static description for evidence
+            # of current conditions, even with an explicit selection prompt.
+            info = engine.classify(text, select_knowledge=False)
+            if not broadcast:
+                with db() as connection:
+                    candidates = retrieve(connection, text, owner, time.time(), settings, STATIC_FACTS, is_usable)
+                candidates = [fact for fact in candidates if fact['kind'] != 'static' or
+                              (info['in_scope'] and info['kind'] == 'static')]
+                selected = engine.lookup_knowledge(text, candidates)
+            if selected:
+                info['fact_id'] = selected['id']
         except EngineUnavailable as error:
             raise HTTPException(503, 'Gemma 3 is unavailable. Please try again shortly.') from error
     if broadcast:
         # Live presentation mode: use routing only to choose the input type.
         # Every submission gets its own crowd question, even a cached repeat.
         info.update(in_scope=True, kind='dynamic', static_answer=None, fact_id=None, crowd_prompt=text)
-    owner = user['id'] if demo else None
     key = question_key(text, info)
-    now = time.time()
     with db() as connection:
         connection.execute('BEGIN IMMEDIATE')
+        now = time.time()
         def finish(answer, status='answered', source='knowledge', cq_id=None, fact=None, source_url=None):
             cursor = connection.execute('''INSERT INTO queries(user_id,text,status,answer,crowd_question_id,created_at,answered_at,
                 source,classification,confidence,n_votes,valid_until,source_url,engine,demo_owner_id,report_summary)
@@ -473,15 +482,18 @@ def create_query(user, text, demo=False):
                 fact['report_summary'] if fact else None))
             return query_object(connection.execute('''SELECT q.*,cq.closes_at FROM queries q
                 LEFT JOIN crowd_questions cq ON cq.id=q.crowd_question_id WHERE q.id=?''', (cursor.lastrowid,)).fetchone())
-        if not info['in_scope'] and settings.demo_mode:
-            return finish('I can help with questions about Grambling State University and campus life. Try asking a campus question.', source='out_of_scope')
-        if info['kind'] == 'static' and info.get('static_answer'):
-            fact = next((fact for fact in STATIC_FACTS if fact.get('id') == info.get('fact_id')), None)
-            if fact:
-                return finish(info['static_answer'], source_url=fact.get('source_url'))
-        fact = connection.execute('SELECT * FROM facts WHERE question_key=? AND demo_owner_id IS ? AND valid_until>? ORDER BY created_at DESC LIMIT 1', (key, owner, now)).fetchone()
-        if fact and not broadcast:
-            return finish(format_fact(fact), source='crowd', fact=fact)
+        if selected:
+            if selected['kind'] == 'static':
+                return finish(selected['value'], source_url=selected.get('source_url'))
+            # Inference can take time. Recheck the current row at publication;
+            # never resurrect a deleted, expired, or newly uncertain answer.
+            row = connection.execute('SELECT * FROM facts WHERE id=? AND demo_owner_id IS ?',
+                                     (selected['fact_row_id'], owner)).fetchone()
+            fact = dict(row) if row else None
+            if fact and fresh(fact, now, settings) and usable_fact(fact, settings, is_usable):
+                fact['valid_until'] = min(fact['valid_until'], fact['created_at'] + settings.live_ttl_seconds)
+                return finish(format_fact(fact), source='crowd', fact=fact)
+        # An unknown topic is still eligible for community help.
         question = connection.execute("SELECT * FROM crowd_questions WHERE question_key=? AND demo_owner_id IS ? AND status='open' AND closes_at>? ORDER BY id LIMIT 1", (key, owner, now)).fetchone()
         if question is None or broadcast:
             cursor = connection.execute('''INSERT INTO crowd_questions(entity,attribute,prompt,answer_type,category,question_key,status,
@@ -499,7 +511,7 @@ def create_query(user, text, demo=False):
             # their earlier vote must not help resolve their own request.
             connection.execute('DELETE FROM crowd_answers WHERE question_id=? AND user_id=?', (cq_id, user['id']))
             connection.execute("DELETE FROM notifications WHERE user_id=? AND crowd_question_id=? AND kind='crowd_question'", (user['id'], cq_id))
-        return finish("I've asked the campus community. Your answer will appear here when enough student reports agree.",
+        return finish("No fresh answer was available in the knowledge base, so I've asked the community. Results will appear here when students respond or the question closes.",
             status='pending', source='pending', cq_id=cq_id)
 
 
@@ -620,7 +632,7 @@ def stats(user=Depends(current_user)):
     with db() as connection:
         return {
             'open_questions': connection.execute("SELECT COUNT(*) FROM crowd_questions WHERE status='open' AND closes_at>? AND demo_owner_id IS NULL", (time.time(),)).fetchone()[0],
-            'fresh_answers': connection.execute('SELECT COUNT(*) FROM facts WHERE valid_until>? AND demo_owner_id IS NULL', (time.time(),)).fetchone()[0],
+            'fresh_answers': connection.execute('SELECT COUNT(*) FROM facts WHERE valid_until>? AND created_at>? AND created_at<=? AND demo_owner_id IS NULL', (time.time(), time.time() - settings.live_ttl_seconds, time.time())).fetchone()[0],
             'students': connection.execute('SELECT COUNT(*) FROM users WHERE is_simulated=0').fetchone()[0],
             'my_contributions': connection.execute('SELECT COUNT(*) FROM crowd_answers a JOIN crowd_questions cq ON cq.id=a.question_id WHERE a.user_id=? AND (cq.demo_owner_id IS NULL OR cq.demo_owner_id=?)', (user['id'], user['demo_owner_id'])).fetchone()[0],
             'my_questions': connection.execute('SELECT COUNT(*) FROM queries WHERE user_id=? AND demo_owner_id IS NULL', (user['id'],)).fetchone()[0],
@@ -632,8 +644,10 @@ def facts(user=Depends(optional_session)):
     live = []
     if user:
         with db() as connection:
-            for row in connection.execute('SELECT * FROM facts WHERE valid_until>? AND (demo_owner_id IS NULL OR demo_owner_id=?) ORDER BY created_at DESC LIMIT 200', (time.time(), user['demo_owner_id'] or user['id'])):
+            now = time.time()
+            for row in connection.execute('SELECT * FROM facts WHERE valid_until>? AND created_at>? AND created_at<=? AND (demo_owner_id IS NULL OR demo_owner_id=?) ORDER BY created_at DESC LIMIT 200', (now, now - settings.live_ttl_seconds, now, user['demo_owner_id'] or user['id'])):
                 item = dict(row)
+                item['valid_until'] = min(item['valid_until'], item['created_at'] + settings.live_ttl_seconds)
                 item['is_demo'] = item.pop('demo_owner_id') is not None
                 item.pop('question_key', None)
                 item['text'] = format_fact(row)
@@ -738,7 +752,7 @@ def demo_reset(user=Depends(mutation_user)):
 @app.get('/api/config')
 def config():
     return {'quorum': settings.quorum, 'agreement': settings.agreement, 'timeout_min': settings.timeout_min,
-        'fact_ttl_hours': settings.fact_ttl_hours, 'demo_mode': settings.demo_mode,
+        'fact_ttl_hours': settings.live_ttl_seconds / 3600, 'live_freshness_min': settings.live_freshness_min, 'demo_mode': settings.demo_mode,
         'question_routing': settings.question_routing, 'report_all': settings.broadcast_questions,
         'server_time': time.time(),
         'engine': engine.status(), 'llm': settings.llm_model}

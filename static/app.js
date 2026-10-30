@@ -203,7 +203,7 @@
     const statuses = {available:"Gemma 3 connected",unverified:"Connection not yet verified",degraded:"Gemma 3 unavailable",demo:"Demo simulation enabled"};
     $("engine-status").innerHTML = `<span class="status-dot"></span>${esc(statuses[engine.status] || "Connection not yet verified")}`;
     $("engine-status").dataset.status = engine.status || "unverified";
-    $("engine-detail").textContent = config.demo_mode ? "Simulated engine · no live AI inference" : engine.status === "degraded" ? "Answers may be unavailable or use a labeled fallback." : `${engine.model || config.llm || "Gemma 3"} · ${engine.provider === "ollama" ? "Ollama" : "Hosted endpoint"}`;
+    $("engine-detail").textContent = engine.mode === "demo" ? "Simulated engine · no live AI inference" : engine.status === "degraded" ? "Answers may be unavailable or use a labeled fallback." : `${engine.model || config.llm || "Gemma 3"} · ${engine.provider === "ollama" ? "Ollama" : "Hosted endpoint"}`;
     $("engine-detail").title = engine.last_error || "";
     $("quorum-label").textContent = `${config.quorum} student responses`;
     $("community-rule-detail").textContent = config.report_all ? ` or ${config.timeout_min} minute${config.timeout_min === 1 ? "" : "s"} before results are shared. Every response counts, including “Not sure.”` : ' and enough agreement before an answer is shared. It’s always okay to say “Not sure.”';
@@ -213,6 +213,7 @@
     $("student-panel-title").textContent = student ? `You’re signed in as ${state.user.display_name}.` : "Ask here. Answer in three student tabs.";
     $("student-panel-help").textContent = student ? "Open Questions for you to submit your answer. Live answers shows completed results. Each student gets one vote, and the final answer returns automatically to the account that asked." : "Ask a question or create a sample below. Set up the student accounts, open each link, and submit an answer in each tab. Return here to see the answer after three agreeing reports.";
     if (config.report_all) $("student-panel-help").textContent = student ? `Share Yes, No, Not sure, or a written response. Results return to the asker after ${config.quorum} responses or ${config.timeout_min} minute${config.timeout_min === 1 ? "" : "s"}.` : `Ask here, then open each student tab and submit a response. Results return here after ${config.quorum} responses or ${config.timeout_min} minute${config.timeout_min === 1 ? "" : "s"}, with the share for each answer. “Not sure” counts too.`;
+    if (config.question_routing === "knowledge_first" && !student) $("student-panel-help").textContent = `Gemma checks saved knowledge first. If an answer is missing or changing information is ${config.live_freshness_min || 5} minutes old, the question goes to the student tabs. Stable campus facts stay reusable. Community results return after ${config.quorum} responses${config.report_all ? ` or ${config.timeout_min} minute${config.timeout_min === 1 ? "" : "s"}` : " agree"}.`;
     $("prepare-students").hidden = !!student;
     $("prepare-students").disabled = state.studentsBusy;
     $("prepare-students").textContent = state.students.length ? "Reconnect student accounts" : "Set up 3 student accounts";
@@ -445,7 +446,7 @@
     showError("ask-error");
     const sessionVersion = state.requestVersion;
     try {
-      // Static questions can need two model calls, each capped at 300 seconds.
+      // A knowledge miss can need retrieval and routing calls, each capped at 300 seconds.
       const query = await api("/api/ask",{text},{timeout:620000});
       if (sessionVersion !== state.requestVersion) return;
       state.queries = [query,...state.queries.filter(q => q.id !== query.id)];

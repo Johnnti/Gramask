@@ -3,6 +3,7 @@ import os
 import sqlite3
 from contextlib import contextmanager
 from config import settings
+from knowledge import init_index
 
 @contextmanager
 def db():
@@ -93,4 +94,16 @@ def init_db():
             columns = {row[1] for row in connection.execute(f'PRAGMA table_info({table})')}
             if 'report_summary' not in columns:
                 connection.execute(f'ALTER TABLE {table} ADD COLUMN report_summary TEXT')
-        connection.execute('PRAGMA user_version=3')
+        # Bring older long-lived records and their history labels under the
+        # same freshness policy. Do not refresh timestamps during migration.
+        connection.execute('''UPDATE facts SET created_at=MIN(created_at, COALESCE(
+            (SELECT MIN(a.created_at) FROM crowd_answers a WHERE a.question_id=facts.crowd_question_id), created_at))''')
+        connection.execute('UPDATE facts SET valid_until=MIN(valid_until, created_at+?)', (settings.live_ttl_seconds,))
+        connection.execute('''UPDATE queries SET valid_until=MIN(valid_until,
+            (SELECT f.valid_until FROM facts f WHERE f.crowd_question_id=queries.crowd_question_id))
+            WHERE valid_until IS NOT NULL AND EXISTS
+            (SELECT 1 FROM facts f WHERE f.crowd_question_id=queries.crowd_question_id)''')
+        # Import here to keep configuration and initialization explicit.
+        from llm import STATIC_FACTS
+        init_index(connection, STATIC_FACTS)
+        connection.execute('PRAGMA user_version=4')

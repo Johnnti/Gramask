@@ -41,7 +41,7 @@ services:
       DEMO_MODE: "0"
       DEMO_BROADCAST_ALL: "0"
       ALLOW_FALLBACK: "0"
-      QUESTION_ROUTING: ${QUESTION_ROUTING:-community}
+      QUESTION_ROUTING: ${QUESTION_ROUTING:-knowledge_first}
       LLM_PROVIDER: ollama
       LLM_BASE_URL: http://ollama:11434
       LLM_MODEL: ${LLM_MODEL:-gemma3:4b}
@@ -50,6 +50,7 @@ services:
       QUORUM: ${QUORUM:-3}
       AGREEMENT: ${AGREEMENT:-0.6}
       TIMEOUT_MIN: ${TIMEOUT_MIN:-30}
+      LIVE_FRESHNESS_MIN: ${LIVE_FRESHNESS_MIN:-5}
       FACT_TTL_HOURS: ${FACT_TTL_HOURS:-2}
       SESSION_DAYS: ${SESSION_DAYS:-14}
       ASK_RATE_LIMIT: ${ASK_RATE_LIMIT:-10}

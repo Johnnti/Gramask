@@ -127,7 +127,7 @@ class ApiIntegrationTests(unittest.TestCase):
     def test_broadcast_demo_sends_every_submission_to_all_other_students(self):
         owner, other_asker = self.student(), self.student()
         accounts = owner.post('/api/demo/students', json={}).json()
-        with patch.object(self.application.settings, 'demo_broadcast_all', True):
+        with patch.object(self.application.settings, 'question_routing', 'community'), patch.object(self.application.settings, 'demo_broadcast_all', True):
             question_ids = set()
             for asker, text in ((owner, 'What going on at the yard right now'),
                                 (owner, 'When was Grambling State University founded?'),
@@ -153,7 +153,7 @@ class ApiIntegrationTests(unittest.TestCase):
     def test_broadcast_demo_counts_every_choice_and_returns_shares(self):
         owner = self.student()
         voters = [self.student() for _ in range(3)]
-        with patch.object(self.application.settings, 'demo_broadcast_all', True), patch.object(self.application.settings, 'timeout_min', 1):
+        with patch.object(self.application.settings, 'question_routing', 'community'), patch.object(self.application.settings, 'demo_broadcast_all', True), patch.object(self.application.settings, 'timeout_min', 1):
             for values in [('No', 'No', 'Not sure'), ('Yes', 'No', 'Not sure'), ('Not sure',) * 3, ('No',) * 3, ('Yes',) * 3]:
                 with self.subTest(values=values):
                     question = self.ask(owner)
@@ -179,7 +179,7 @@ class ApiIntegrationTests(unittest.TestCase):
     def test_broadcast_demo_returns_written_and_uncertain_responses(self):
         owner = self.student()
         voters = [self.student() for _ in range(3)]
-        with patch.object(self.application.settings, 'demo_broadcast_all', True):
+        with patch.object(self.application.settings, 'question_routing', 'community'), patch.object(self.application.settings, 'demo_broadcast_all', True):
             for values, counts in [(('Not sure', "don't know", 'Nov 3rd'), {'Not sure': 2, 'Nov 3rd': 1}),
                                    (('Pizza', 'Salad', 'Rice'), {'Pizza': 1, 'Salad': 1, 'Rice': 1})]:
                 question = self.ask(owner, 'When is homecoming?')
@@ -193,7 +193,7 @@ class ApiIntegrationTests(unittest.TestCase):
     def test_broadcast_demo_deadline_returns_partial_or_no_answers_for_both_types(self):
         owner = self.student()
         voters = [self.student() for _ in range(3)]
-        with patch.object(self.application.settings, 'demo_broadcast_all', True):
+        with patch.object(self.application.settings, 'question_routing', 'community'), patch.object(self.application.settings, 'demo_broadcast_all', True):
             for text, values in [('Is the library open?', ('No', 'Not sure')),
                                  ('What is happening at the yard?', ('Not sure', 'Music'))]:
                 for count in range(3):
@@ -221,7 +221,7 @@ class ApiIntegrationTests(unittest.TestCase):
     def test_written_answer_endorsements_count_once_and_allow_new_responses(self):
         owner = self.student()
         voters = [self.student() for _ in range(3)]
-        with patch.object(self.application.settings, 'demo_broadcast_all', True):
+        with patch.object(self.application.settings, 'question_routing', 'community'), patch.object(self.application.settings, 'demo_broadcast_all', True):
             for last_value in (None, 'Music at the yard'):
                 question = self.ask(owner, 'What is happening at the yard?')
                 qid = question['crowd_question_id']
@@ -253,7 +253,7 @@ class ApiIntegrationTests(unittest.TestCase):
 
     def test_endorsements_reject_wrong_question_own_votes_closed_and_invalid_requests(self):
         owner, first, second = self.student(), self.student(), self.student()
-        with patch.object(self.application.settings, 'demo_broadcast_all', True):
+        with patch.object(self.application.settings, 'question_routing', 'community'), patch.object(self.application.settings, 'demo_broadcast_all', True):
             question = self.ask(owner, 'What is happening at the yard?')
             qid = question['crowd_question_id']
             self.vote(first, qid, 'An event')

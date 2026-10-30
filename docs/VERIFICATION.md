@@ -1,5 +1,15 @@
 # Verification — 2026-10-30
 
+## Knowledge-first correction (latest)
+
+- 72 regression tests passed on the host and in the Python 3.12 deployment image. Coverage includes stable fact reuse, unknown-topic community routing, five-minute expiry (including legacy two-hour records), a 299.999/300-second boundary, expiry during inference, unchanged timestamps on reuse, uncertainty/ties, private demo evidence, yes/no polarity, index rebuild/deletion, endorsements, and one-minute demo closure.
+- Seven real Gemma 3 checks passed using an isolated temporary database and no mocked model: inventory/accounts (0.30 s), sourced founding date (24.41 s), sourced library name (11.80 s), unfamiliar topic to students (5.55 s), current conditions preserving negation (5.95 s), text agreement/notification/fresh reuse (15.11 s), and stale evidence returning to every contributor (1.89 s).
+- A one-call retrieval experiment incorrectly selected a static library description for a current-condition question. The corrected implementation classifies the question without reference facts first and excludes static candidates for changing information. The live regression then passed. Local CPU inference is not instantaneous; knowledge answers avoid waiting for community responses.
+- SQLite FTS5 uses the existing database with no embedding service. The latest production configuration defaults to `QUESTION_ROUTING=knowledge_first` and `LIVE_FRESHNESS_MIN=5`. Stable curated facts remain reusable. Explicit older `.env.production` values must be updated when deploying.
+- The running demo on port 8009 now uses real Gemma, knowledge-first routing, a five-minute live freshness cap, and the existing three-response/one-minute result rules. Its verified pre-update backup is `/app/data/before-knowledge-first-20261030.db` in the demo volume. Accounts and history were retained; the separate app on port 8008 and Ollama were not restarted.
+- Browser verification preserved all four signed-in sessions. The founding question returned the sourced 1901 answer without a crowd request. A written demo question reached Student 1, 2, and 3; the first response plus two endorsements returned 3/3 support to the asker. Asking it again created an answered query with no new crowd request and exactly the same expiry. No browser warnings/errors were observed. Screenshot: `artifacts/knowledge-first-demo.jpg`.
+- The sections below document earlier releases and their historical behavior.
+
 ## DigitalOcean production release
 
 - 55 tests passed on the host and inside the separate `gramask-production:2026-10-30` image. Production-specific coverage checks HTTPS session cookies, private histories, host/origin rejection, disabled demo routes, unknown-topic routing, background text consensus, trusted-proxy rate limits, and a verified SQLite WAL backup with owner-only permissions.
